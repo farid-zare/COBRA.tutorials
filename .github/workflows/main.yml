@@ -4,68 +4,43 @@ on:
   push:
     branches: [ master ]
     paths:
-    - '**.mlx'
+      - '**.mlx'
 
 jobs:
-  copy-changes:
-    runs-on: self-hosted
+  convert-and-sync:
+    runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Source Repo
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
-          repository: '${{ github.repository_owner }}/COBRA.tutorials'
-          token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Get the repository's owner name
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v1
+
+      - name: Get Changed MLX Files
+        id: get_files
         run: |
-          echo "REPO_OWNER=${{ github.repository_owner }}" >> $GITHUB_ENV
-          
-      - name: Clone the destination repository
+          changed_files=$(git diff --name-only HEAD~1 HEAD | grep '\.mlx' || true)
+          echo "changed_files=${changed_files}" >> $GITHUB_ENV
+
+      - name: Convert MLX to HTML, PDF, and M
+        if: env.changed_files != ''
         run: |
-          rm -rf cobratoolbox
-          echo "Cloning the destination repository: git@github.com:opencobra/cobratoolbox.git"
-          git clone --depth 1 --branch gh-pages ssh://git@github.com/$REPO_OWNER/cobratoolbox.git
-          
-      - name: Get Changed mlx Files and sinc with destination repository
-        id: getFile
-        run: |
-          changed_files=$(git diff --name-only HEAD~1 HEAD | grep '\.mlx' | tr '\n' ' ')
-          # Setup virtual frame buffer
           for file in $changed_files; do
-            if [[ $file != "" ]]; then
-              echo "Processing: $file"
-              ABSOLUTE_FILE_PATH=$(realpath "$file")
-              HTML_FILE_PATH=$(echo "$ABSOLUTE_FILE_PATH" | sed 's/.mlx/.html/g')
-              PDF_FILE_PATH=$(echo "$ABSOLUTE_FILE_PATH" | sed 's/.mlx/.pdf/g')
-              M_FILE_PATH=$(echo "$ABSOLUTE_FILE_PATH" | sed 's/.mlx/.m/g')
-              /usr/local/MATLAB/R2024a/bin/matlab -batch "matlab.internal.liveeditor.openAndConvert('$ABSOLUTE_FILE_PATH', '$HTML_FILE_PATH')"
-              /usr/local/MATLAB/R2024a/bin/matlab -batch "matlab.internal.liveeditor.openAndConvert('$ABSOLUTE_FILE_PATH', '$PDF_FILE_PATH')"
-              /usr/local/MATLAB/R2024a/bin/matlab -batch "matlab.internal.liveeditor.openAndConvert('$ABSOLUTE_FILE_PATH', '$M_FILE_PATH')"
-              cd cobratoolbox
-              TARGET_DIR="stable/tutorials/$(dirname "$file")"
-              mkdir -p "$TARGET_DIR"
-              echo "Copying the HTML, PDF, mlx and .m files to the target directory..."
-              cp "$HTML_FILE_PATH" "$TARGET_DIR/"
-              cd ../
-            fi
+            HTML_FILE_PATH="${file%.mlx}.html"
+            PDF_FILE_PATH="${file%.mlx}.pdf"
+            M_FILE_PATH="${file%.mlx}.m"
+            matlab -batch "matlab.internal.liveeditor.openAndConvert('$file', '$HTML_FILE_PATH')"
+            matlab -batch "matlab.internal.liveeditor.openAndConvert('$file', '$PDF_FILE_PATH')"
+            matlab -batch "matlab.internal.liveeditor.openAndConvert('$file', '$M_FILE_PATH')"
           done
-        
-      - name: Pushing the changes to both COBRA.tutorials and cobratoolbox repos
+
+      - name: Commit and Push Changes
         run: |
-          # Set up git config
-          echo "Setting up git config..."
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          # Add, commit, and push the changes
-          cd cobratoolbox
-          git pull
           git add .
-          git commit -m "Sync files from source repo" || echo "No changes to commit"
+          git commit -m "Converted MLX files to HTML, PDF, and M formats" || echo "No changes to commit"
           git push
-          cd ..
-          rm -rf cobratoolbox
-          git add .
-          git commit -m "created .HTML, .pdf and .m files"
-          git push origin master
-          echo "Script execution completed."
